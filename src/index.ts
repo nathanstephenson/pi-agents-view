@@ -5,14 +5,30 @@ import type { ManagedSessionRow } from "./types.js";
 
 const AGENTS_VIEW_STATUS_ID = "agents-view";
 
-export async function openRecentRow(row: ManagedSessionRow | undefined, ctx: ExtensionCommandContext): Promise<void> {
+export async function openSessionRow(row: ManagedSessionRow | undefined, ctx: ExtensionCommandContext): Promise<void> {
 	if (!row?.sessionFile) {
 		ctx.ui.notify("No session file to open", "warning");
 		return;
 	}
 
+	if (row.source === "sdk-live") {
+		if (row.isStreaming || row.sdk?.session.isStreaming || row.status === "running" || row.status === "queued") {
+			ctx.ui.notify("Session is running; inspect or abort it first", "warning");
+			return;
+		}
+
+		if (row.status === "aborting") {
+			ctx.ui.notify("Session is still aborting; wait until it is idle", "warning");
+			return;
+		}
+
+		row.sdk?.unsubscribe();
+		row.sdk?.session.dispose();
+	}
+
+	const sessionFile = row.sessionFile;
 	await ctx.waitForIdle();
-	await ctx.switchSession(row.sessionFile);
+	await ctx.switchSession(sessionFile);
 }
 
 async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSessionRegistry): Promise<void> {
@@ -46,7 +62,7 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 				},
 				onOpen: (rowId) => {
 					const row = registry.getRow(rowId);
-					void openRecentRow(row, ctx).catch((error) => {
+					void openSessionRow(row, ctx).catch((error) => {
 						ctx.ui.notify(`Failed to open session: ${error instanceof Error ? error.message : String(error)}`, "warning");
 					});
 				},
