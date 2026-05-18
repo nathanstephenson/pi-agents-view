@@ -130,6 +130,48 @@ describe("AgentsModalComponent", () => {
 		expect(modal.render(90).join("\n")).toContain("New session: ▌");
 	});
 
+	test("grows prompt box up to ten wrapped lines then scrolls to cursor", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		for (const char of "abcdefghijklmnopqrstuvwxy") modal.handleInput(char);
+		const fourWrappedLines = modal.render(20);
+		expect(fourWrappedLines.filter((line) => line.includes("New session:") || line.includes("│              "))).toHaveLength(4);
+		expect(fourWrappedLines.join("\n")).toContain("vwxy");
+
+		for (const char of "z0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") modal.handleInput(char);
+		const scrolled = modal.render(20);
+		const promptLines = scrolled.filter((line) => line.includes("New session:") || line.includes("│              "));
+		expect(promptLines).toHaveLength(10);
+		expect(scrolled.join("\n")).not.toContain("New session: abcdef");
+		expect(scrolled.join("\n")).toContain("z▌");
+	});
+
+	test("caps prompt box below ten lines when available height is smaller", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxPromptLines: () => 3,
+		});
+
+		for (const char of "abcdefghijklmnopqrstuvwxyz0123456789") modal.handleInput(char);
+		const rendered = modal.render(20).join("\n");
+
+		expect(rendered.split("\n").filter((line) => line.includes("New session:") || line.includes("│              "))).toHaveLength(3);
+		expect(rendered).not.toContain("New session: abcdef");
+		expect(rendered).toContain("9▌");
+	});
+
 	test("right opens selected idle row and escape closes", () => {
 		const opened: string[] = [];
 		let closed = false;
