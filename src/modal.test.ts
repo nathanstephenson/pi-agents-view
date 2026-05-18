@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { AgentsModalComponent } from "./modal.js";
 import type { ManagedSessionRow } from "./types.js";
 
@@ -110,6 +110,63 @@ describe("AgentsModalComponent", () => {
 		expect(rendered).toHaveLength(12);
 	});
 
+	test("renders an empty prompt with dim placeholder and no cursor", () => {
+		const themed = {
+			fg: (name: string, text: string) => (name === "dim" ? `<dim>${text}</dim>` : text),
+			bold: (text: string) => text,
+		};
+		const modal = new AgentsModalComponent({
+			theme: themed,
+			getRows: () => [],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		const rendered = modal.render(90).join("\n");
+
+		expect(rendered).toContain("New session: <dim>Type prompt…</dim>");
+		expect(rendered).not.toContain("Type prompt…</dim>▌");
+	});
+
+	test("emits the hardware cursor marker when focused", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		modal.focused = true;
+
+		modal.handleInput("a");
+
+		expect(modal.render(90).join("\n")).toContain(`New session: a${CURSOR_MARKER}▌`);
+	});
+
+	test("does not split the hardware cursor marker when focused text wraps", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		modal.focused = true;
+		for (const char of "abcdefg") modal.handleInput(char);
+
+		const promptLines = modal.render(20).filter((line) => line.includes("New session:") || line.includes("│              "));
+
+		expect(promptLines[0]).toContain("New session: abcdefg");
+		expect(promptLines[1]).toContain(`             ${CURSOR_MARKER}▌`);
+		expect(promptLines.join("\n")).not.toContain("│              _pi:c");
+	});
+
 	test("edits prompt, creates on enter, and clears prompt", () => {
 		const created: string[] = [];
 		const modal = new AgentsModalComponent({
@@ -127,7 +184,8 @@ describe("AgentsModalComponent", () => {
 		modal.handleInput("\r");
 
 		expect(created).toEqual(["abd"]);
-		expect(modal.render(90).join("\n")).toContain("New session: ▌");
+		expect(modal.render(90).join("\n")).toContain("New session: Type prompt…");
+		expect(modal.render(90).join("\n")).not.toContain("Type prompt…▌");
 	});
 
 	test("grows prompt box up to ten wrapped lines then scrolls to cursor", () => {

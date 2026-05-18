@@ -188,12 +188,13 @@ export class AgentsModalComponent implements Component, Focusable {
 	}
 
 	private promptInputLines(width: number): string[] {
-		const cursor = this.focused ? CURSOR_MARKER : "▌";
 		const label = "New session: ";
 		const continuation = " ".repeat(label.length);
 		const firstWidth = Math.max(1, width - label.length);
 		const continuationWidth = Math.max(1, width - continuation.length);
-		const chars = Array.from(`${this.prompt}${cursor}`);
+		const prompt = this.prompt || this.options.theme.fg("dim", "Type prompt…");
+		const cursor = this.prompt ? "▌" : "";
+		const chars = Array.from(`${prompt}${cursor}`);
 		const wrapped: string[] = [];
 		let index = 0;
 		let first = true;
@@ -205,6 +206,10 @@ export class AgentsModalComponent implements Component, Focusable {
 			index += chunkWidth;
 			first = false;
 		} while (index < chars.length);
+		if (this.prompt && this.focused) {
+			const lastLine = wrapped[wrapped.length - 1];
+			wrapped[wrapped.length - 1] = `${lastLine.slice(0, -1)}${CURSOR_MARKER}${lastLine.slice(-1)}`;
+		}
 		return wrapped.slice(-this.maxPromptLines());
 	}
 
