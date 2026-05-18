@@ -96,18 +96,23 @@ async function openAgentsView(
 	try {
 		await ctx.ui.custom<void>(
 		(tui, theme, _keybindings, done) => {
-			const unsubscribe = registry.subscribe(() => tui.requestRender());
+			const requestRender = () => tui.requestRender();
+			const originalRender = tui.render.bind(tui);
+			let restored = false;
+			(tui as unknown as { render(width: number): string[] }).render = (width: number) =>
+				Array.from({ length: tui.terminal.rows }, () => " ".repeat(width));
+			const restoreMainRender = () => {
+				if (restored) return;
+				restored = true;
+				(tui as unknown as { render(width: number): string[] }).render = originalRender;
+			};
+			const unsubscribe = registry.subscribe(requestRender);
 			const close = () => {
 				unsubscribe();
+				restoreMainRender();
 				done();
 			};
-			const maxPromptLines = () => {
-				const rowCount = registry.getRows().length;
-				const visibleRowCount = rowCount === 0 ? 1 : Math.min(rowCount, 5);
-				const fixedLineCount = 6 + visibleRowCount;
-				const overlayRows = Math.max(1, Math.floor(tui.terminal.rows * 0.9));
-				return Math.max(1, Math.min(10, overlayRows - fixedLineCount));
-			};
+			const maxHeightLines = () => Math.max(8, Math.floor(tui.terminal.rows * 0.9));
 			const modal = new AgentsModalComponent({
 				theme,
 				getRows: () => registry.getRows(),
@@ -131,8 +136,8 @@ async function openAgentsView(
 					});
 				},
 				onClose: close,
-				onInvalidate: () => tui.requestRender(),
-				maxPromptLines,
+				onInvalidate: requestRender,
+				maxHeightLines,
 			});
 			modal.focused = true;
 			return modal;

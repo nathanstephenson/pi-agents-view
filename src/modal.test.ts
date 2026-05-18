@@ -5,6 +5,7 @@ import type { ManagedSessionRow } from "./types.js";
 
 const theme = {
 	fg: (_name: string, text: string) => text,
+	bg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
 };
 
@@ -76,6 +77,45 @@ describe("AgentsModalComponent", () => {
 		expect(modal.render(90)).toHaveLength(10);
 	});
 
+	test("renders every line with opaque background", () => {
+		const opaqueTheme = {
+			fg: (_name: string, text: string) => text,
+			bg: (name: string, text: string) => `<${name}>${text}</${name}>`,
+			bold: (text: string) => text,
+		};
+		const modal = new AgentsModalComponent({
+			theme: opaqueTheme,
+			getRows: () => [row("one", "First")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 8,
+		});
+
+		for (const line of modal.render(90)) expect(line).toContain("<customMessageBg>");
+	});
+
+	test("reapplies modal background after truncate resets", () => {
+		const ansiTheme = {
+			fg: (name: string, text: string) => (name === "accent" ? `\x1b[33m${text}\x1b[0m` : text),
+			bg: (_name: string, text: string) => `\x1b[48;5;235m${text}\x1b[49m`,
+			bold: (text: string) => text,
+		};
+		const modal = new AgentsModalComponent({
+			theme: ansiTheme,
+			getRows: () => [row("one", "A very long selected session title that must truncate near the right edge")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		const selectedRow = modal.render(40).find((line) => line.includes("A very long"));
+
+		expect(selectedRow).toContain("\x1b[0m\x1b[48;5;235m");
+	});
+
 	test("renders every line at the same visible width to clear old overlay content", () => {
 		const modal = new AgentsModalComponent({
 			theme,
@@ -92,7 +132,47 @@ describe("AgentsModalComponent", () => {
 		expect(widths).toEqual(new Set([40]));
 	});
 
-	test("caps default list height to fit compact overlays", () => {
+	test("keeps multiline row content on one terminal line", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("one", "Title", {
+					assistantPreview: "first line\nReferences are relative to /tmp/path\nthird line",
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 8,
+		});
+
+		const rendered = modal.render(80);
+
+		expect(rendered).toHaveLength(8);
+		expect(rendered.every((line) => !line.includes("\n") && !line.includes("\r"))).toBe(true);
+		expect(new Set(rendered.map((line) => visibleWidth(line)))).toEqual(new Set([80]));
+	});
+
+	test("caps modal frame width on wide terminals", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("one", "Only session")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 8,
+		});
+
+		const rendered = modal.render(200).join("\n");
+
+		expect(rendered).toContain("┌ Agents ");
+		expect(rendered).toContain("│ > ○ Only session");
+		expect(visibleWidth(rendered.split("\n")[0] ?? "")).toBe(200);
+	});
+
+	test("uses available modal height for as many rows as fit", () => {
 		const rows = Array.from({ length: 20 }, (_, index) => row(`row-${index}`, `Session ${index}`));
 		const modal = new AgentsModalComponent({
 			theme,
@@ -101,13 +181,69 @@ describe("AgentsModalComponent", () => {
 			onOpen: () => {},
 			onAbort: noop,
 			onClose: () => {},
+			maxHeightLines: () => 14,
 		});
 
 		const rendered = modal.render(90);
 		const sessionLines = rendered.filter((line) => line.includes("Session "));
 
-		expect(sessionLines).toHaveLength(5);
+		expect(sessionLines).toHaveLength(7);
+		expect(rendered).toHaveLength(14);
+	});
+
+	test("pads fixed-height modal so background sits behind it", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("one", "Only session")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 12,
+		});
+
+		const rendered = modal.render(90);
+
 		expect(rendered).toHaveLength(12);
+		expect(rendered.filter((line) => line.includes("Only session"))).toHaveLength(1);
+		expect(rendered.filter((line) => /│\s+│/.test(line))).toHaveLength(4);
+	});
+
+	test("honors the minimum fixed modal height", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("one", "Only session")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 7,
+		});
+
+		expect(modal.render(90)).toHaveLength(8);
+	});
+
+	test("wrapped prompt text reduces visible sessions and keeps bottom selection visible", () => {
+		const rows = Array.from({ length: 8 }, (_, index) => row(`row-${index}`, `Session ${index}`));
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => rows,
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 12,
+		});
+
+		for (let i = 0; i < 7; i++) modal.handleInput("\u001b[B");
+		for (const char of "abcdefghijklmnopqrstuvwxyz") modal.handleInput(char);
+		const rendered = modal.render(20).join("\n");
+
+		expect(rendered).not.toContain("Session 5");
+		expect(rendered).toContain("Session 6");
+		expect(rendered).toContain("Session 7");
+		expect(rendered.split("\n")).toHaveLength(12);
+		expect(rendered.split("\n").filter((line) => line.includes("Session "))).toHaveLength(2);
 	});
 
 	test("renders an empty prompt with dim placeholder and no cursor", () => {
@@ -249,6 +385,28 @@ describe("AgentsModalComponent", () => {
 
 		expect(opened).toEqual(["one"]);
 		expect(closed).toBe(true);
+	});
+
+	test("detail view uses fixed modal height", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Fix auth tests", {
+					source: "sdk-live",
+					status: "running",
+					assistantPreview: "Working",
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 12,
+		});
+
+		modal.handleInput("\u001b[C");
+
+		expect(modal.render(90)).toHaveLength(12);
 	});
 
 	test("right enters detail for running sdk row and left returns to list", () => {
