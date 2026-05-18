@@ -1,10 +1,10 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, SelectList, Text, type SelectItem } from "@earendil-works/pi-tui";
 
 const AGENTS_VIEW_STATUS_ID = "agents-view";
 
-async function openAgentsView(ctx: ExtensionCommandContext): Promise<void> {
+async function openAgentsView(ctx: ExtensionContext): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("Agents view requires the interactive TUI", "warning");
 		return;
