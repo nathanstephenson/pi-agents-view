@@ -105,7 +105,7 @@ async function openAgentsView(
 				const rowCount = registry.getRows().length;
 				const visibleRowCount = rowCount === 0 ? 1 : Math.min(rowCount, 5);
 				const fixedLineCount = 6 + visibleRowCount;
-				const overlayRows = Math.max(1, Math.floor(tui.terminal.rows * 0.8));
+				const overlayRows = Math.max(1, Math.floor(tui.terminal.rows * 0.9));
 				return Math.max(1, Math.min(10, overlayRows - fixedLineCount));
 			};
 			const modal = new AgentsModalComponent({
@@ -140,10 +140,10 @@ async function openAgentsView(
 		{
 			overlay: true,
 			overlayOptions: {
-				anchor: "right-center",
-				width: "55%",
+				anchor: "center",
+				width: "90%",
 				minWidth: 52,
-				maxHeight: "80%",
+				maxHeight: "90%",
 				margin: 1,
 			},
 		},
