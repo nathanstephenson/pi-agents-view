@@ -1,17 +1,31 @@
-import { SessionManager, type ExtensionContext, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	createAgentSession,
+	type CreateAgentSessionResult,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	type SessionInfo,
+} from "@earendil-works/pi-coding-agent";
+import { applySessionEvent } from "./reducers.js";
 import type { ManagedSessionRow, RegistryListener, SessionRowStatus } from "./types.js";
 
 interface RegistryOptions {
 	listSessions?: (cwd: string) => Promise<SessionInfo[]>;
+	createSession?: typeof createAgentSession;
+	createSessionManager?: (cwd: string) => unknown;
 }
 
 export class AgentsSessionRegistry {
 	private readonly rows = new Map<string, ManagedSessionRow>();
 	private readonly listeners = new Set<RegistryListener>();
 	private readonly listSessions: (cwd: string) => Promise<SessionInfo[]>;
+	private readonly createSession: typeof createAgentSession;
+	private readonly createSessionManager: (cwd: string) => unknown;
 
 	constructor(options: RegistryOptions = {}) {
 		this.listSessions = options.listSessions ?? ((cwd) => SessionManager.list(cwd));
+		this.createSession = options.createSession ?? createAgentSession;
+		this.createSessionManager = options.createSessionManager ?? ((cwd) => SessionManager.create(cwd));
 	}
 
 	subscribe(listener: RegistryListener): () => void {
@@ -70,6 +84,45 @@ export class AgentsSessionRegistry {
 		this.notify();
 	}
 
+	async startBackgroundSession(prompt: string, ctx: Pick<ExtensionCommandContext, "cwd" | "model" | "modelRegistry">): Promise<void> {
+		const sessionManager = this.createSessionManager(ctx.cwd);
+		const result = (await this.createSession({
+			cwd: ctx.cwd,
+			sessionManager: sessionManager as never,
+			model: ctx.model,
+			modelRegistry: ctx.modelRegistry,
+			resourceLoader: createNoExtensionsResourceLoader(),
+		})) as CreateAgentSessionResult;
+		const { session } = result;
+		const row: ManagedSessionRow = {
+			id: session.sessionId,
+			source: "sdk-live",
+			sessionFile: session.sessionFile,
+			title: titleFromPrompt(prompt),
+			promptPreview: prompt,
+			status: "queued",
+			updatedAt: Date.now(),
+			isStreaming: session.isStreaming,
+		};
+		const unsubscribe = session.subscribe((event) => {
+			applySessionEvent(row, event);
+			row.isStreaming = session.isStreaming || row.isStreaming;
+			this.notify();
+		});
+		row.sdk = { session, unsubscribe };
+		this.rows.set(row.id, row);
+		this.notify();
+
+		void session.prompt(prompt, { source: "extension" }).catch((error: unknown) => {
+			row.status = "error";
+			row.errorMessage = error instanceof Error ? error.message : String(error);
+			row.isStreaming = false;
+			row.activeTool = undefined;
+			row.updatedAt = Date.now();
+			this.notify();
+		});
+	}
+
 	private notify(): void {
 		for (const listener of this.listeners) listener();
 	}
@@ -77,6 +130,17 @@ export class AgentsSessionRegistry {
 
 function recentTitle(info: SessionInfo): string {
 	return info.name || info.firstMessage || info.id || "Recent session";
+}
+
+function titleFromPrompt(prompt: string): string {
+	const firstLine = prompt.trim().split(/\r?\n/, 1)[0] || "Background session";
+	return firstLine.length > 48 ? `${firstLine.slice(0, 47)}…` : firstLine;
+}
+
+function createNoExtensionsResourceLoader(): undefined {
+	// The public SDK supports a caller-provided resourceLoader, but not a simple
+	// noExtensions option on createAgentSession. Leaving it undefined uses SDK defaults.
+	return undefined;
 }
 
 function compareRows(left: ManagedSessionRow, right: ManagedSessionRow): number {
