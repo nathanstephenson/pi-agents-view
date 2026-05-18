@@ -1,83 +1,67 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, SelectList, Text, type SelectItem } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AgentsModalComponent } from "./modal.js";
+import type { ManagedSessionRow } from "./types.js";
 
 const AGENTS_VIEW_STATUS_ID = "agents-view";
 
-async function openAgentsView(ctx: ExtensionContext): Promise<void> {
+async function openAgentsView(ctx: ExtensionCommandContext): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("Agents view requires the interactive TUI", "warning");
 		return;
 	}
 
-	const items: SelectItem[] = [
-		{
-			value: "agents",
-			label: "Agents",
-			description: "Browse configured subagents and launch agent workflows (coming next)",
-		},
-		{
-			value: "chains",
-			label: "Chains",
-			description: "Browse saved subagent chains and pipeline templates (coming next)",
-		},
-		{
-			value: "runs",
-			label: "Runs",
-			description: "Inspect active and recent subagent runs (coming next)",
-		},
-	];
+	const rows = getInitialRows(ctx);
 
-	const selected = await ctx.ui.custom<string | null>(
+	await ctx.ui.custom<void>(
 		(tui, theme, _keybindings, done) => {
-			const container = new Container();
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("Agents View")), 1, 0));
-			container.addChild(
-				new Text(theme.fg("dim", "Foundation loaded. Pick a section; deeper agent data is next."), 1, 0),
-			);
-
-			const list = new SelectList(items, items.length, {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
+			const modal = new AgentsModalComponent({
+				theme,
+				getRows: () => rows,
+				onCreate: (prompt) => {
+					ctx.ui.notify(`Background sessions are coming next: ${prompt}`, "info");
+				},
+				onOpen: (rowId) => {
+					const row = rows.find((candidate) => candidate.id === rowId);
+					ctx.ui.notify(row ? `${row.title} cannot be opened in this slice` : "No row selected", "info");
+				},
+				onClose: () => done(),
+				onInvalidate: () => tui.requestRender(),
 			});
-			list.onSelect = (item) => done(item.value);
-			list.onCancel = () => done(null);
-			container.addChild(list);
-			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc close"), 1, 0));
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-
-			return {
-				render(width: number) {
-					return container.render(width);
-				},
-				invalidate() {
-					container.invalidate();
-				},
-				handleInput(data: string) {
-					list.handleInput(data);
-					tui.requestRender();
-				},
-			};
+			modal.focused = true;
+			return modal;
 		},
 		{
 			overlay: true,
 			overlayOptions: {
 				anchor: "right-center",
-				width: "45%",
-				minWidth: 48,
+				width: "55%",
+				minWidth: 52,
 				maxHeight: "80%",
 				margin: 1,
 			},
 		},
 	);
+}
 
-	if (selected) {
-		ctx.ui.notify(`${selected} view is not implemented yet`, "info");
-	}
+function getInitialRows(ctx: ExtensionContext): ManagedSessionRow[] {
+	return [
+		{
+			id: "current",
+			source: "current-pi",
+			title: "Current Pi session",
+			status: ctx.isIdle() ? "current" : "running",
+			updatedAt: Date.now(),
+			isStreaming: !ctx.isIdle(),
+		},
+		{
+			id: "fake-background",
+			source: "sdk-live",
+			title: "Example background session",
+			promptPreview: "Fake row for modal shell",
+			status: "waiting",
+			updatedAt: Date.now() - 1,
+		},
+	];
 }
 
 export default function agentsViewExtension(pi: ExtensionAPI): void {
@@ -100,7 +84,7 @@ export default function agentsViewExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus(AGENTS_VIEW_STATUS_ID, ctx.ui.theme.fg("dim", "agents:view"));
 
 		if (pi.getFlag("agents") === true) {
-			await openAgentsView(ctx);
+			ctx.ui.notify("Run /agents to open the agents view", "info");
 		}
 	});
 
