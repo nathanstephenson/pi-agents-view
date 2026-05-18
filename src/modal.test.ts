@@ -7,15 +7,18 @@ const theme = {
 	bold: (text: string) => text,
 };
 
-function row(id: string, title: string): ManagedSessionRow {
+function row(id: string, title: string, overrides: Partial<ManagedSessionRow> = {}): ManagedSessionRow {
 	return {
 		id,
 		source: "recent-file",
 		title,
 		status: "recent",
 		updatedAt: Date.now(),
+		...overrides,
 	};
 }
+
+const noop = () => {};
 
 describe("AgentsModalComponent", () => {
 	test("renders list rows", () => {
@@ -24,6 +27,7 @@ describe("AgentsModalComponent", () => {
 			getRows: () => [row("one", "First session"), row("two", "Second session")],
 			onCreate: () => {},
 			onOpen: () => {},
+			onAbort: noop,
 			onClose: () => {},
 		});
 
@@ -38,6 +42,7 @@ describe("AgentsModalComponent", () => {
 			getRows: () => [row("one", "First"), row("two", "Second")],
 			onCreate: () => {},
 			onOpen: (id) => opened.push(id),
+			onAbort: noop,
 			onClose: () => {},
 		});
 
@@ -54,6 +59,7 @@ describe("AgentsModalComponent", () => {
 			getRows: () => [row("one", "First")],
 			onCreate: (prompt) => created.push(prompt),
 			onOpen: () => {},
+			onAbort: noop,
 			onClose: () => {},
 		});
 
@@ -66,7 +72,7 @@ describe("AgentsModalComponent", () => {
 		expect(modal.render(90).join("\n")).toContain("New session: ▌");
 	});
 
-	test("right opens selected row and escape closes", () => {
+	test("right opens selected idle row and escape closes", () => {
 		const opened: string[] = [];
 		let closed = false;
 		const modal = new AgentsModalComponent({
@@ -74,6 +80,7 @@ describe("AgentsModalComponent", () => {
 			getRows: () => [row("one", "First")],
 			onCreate: () => {},
 			onOpen: (id) => opened.push(id),
+			onAbort: () => {},
 			onClose: () => {
 				closed = true;
 			},
@@ -84,5 +91,64 @@ describe("AgentsModalComponent", () => {
 
 		expect(opened).toEqual(["one"]);
 		expect(closed).toBe(true);
+	});
+
+	test("right enters detail for running sdk row and left returns to list", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Fix auth tests", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					activeTool: "grep",
+					assistantPreview: "Latest output preview",
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: () => {},
+			onClose: () => {},
+		});
+
+		modal.handleInput("\u001b[C");
+		const detail = modal.render(90).join("\n");
+
+		expect(detail).toContain("Fix auth tests");
+		expect(detail).toContain("Status: running");
+		expect(detail).toContain("Tool: grep");
+		expect(detail).toContain("Latest output preview");
+
+		modal.handleInput("\u001b[D");
+
+		expect(modal.render(90).join("\n")).toContain("New session:");
+	});
+
+	test("detail aborts running row and opens idle row", () => {
+		const aborted: string[] = [];
+		const opened: string[] = [];
+		let rows = [
+			row("run", "Fix auth tests", {
+				source: "sdk-live",
+				status: "running",
+				isStreaming: true,
+			}),
+		];
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => rows,
+			onCreate: () => {},
+			onOpen: (id) => opened.push(id),
+			onAbort: (id) => aborted.push(id),
+			onClose: () => {},
+		});
+
+		modal.handleInput("\u001b[C");
+		modal.handleInput("a");
+		expect(aborted).toEqual(["run"]);
+
+		rows = [row("run", "Fix auth tests", { source: "sdk-live", status: "aborted", isStreaming: false })];
+		modal.handleInput("o");
+		expect(opened).toEqual(["run"]);
 	});
 });

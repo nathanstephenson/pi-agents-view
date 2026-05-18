@@ -24,6 +24,15 @@ class FakeSession {
 		this.listener?.({ type: "agent_start" } as never);
 	}
 
+	abortCalls = 0;
+	abortError: Error | undefined;
+
+	async abort(): Promise<void> {
+		this.abortCalls++;
+		if (this.abortError) throw this.abortError;
+		this.isStreaming = false;
+	}
+
 	dispose(): void {}
 }
 
@@ -100,5 +109,44 @@ describe("AgentsSessionRegistry", () => {
 		} as never);
 
 		expect(registry.getRow("sdk-1")?.assistantPreview).toContain("reconnect issue");
+	});
+
+	test("aborts a live SDK session without disposing it", async () => {
+		const fake = new FakeSession();
+		const statuses: string[] = [];
+		const registry = new AgentsSessionRegistry({
+			createSession: (async () => ({ session: fake as never, extensionsResult: { extensions: [], errors: [], runtime: undefined } as never })) as never,
+		});
+		registry.subscribe(() => statuses.push(registry.getRow("sdk-1")?.status ?? "none"));
+
+		await registry.startBackgroundSession("Stop me", { cwd: "/repo" } as never);
+		const row = registry.getRow("sdk-1");
+		if (!row) throw new Error("expected row");
+		row.activeTool = "bash";
+		row.isStreaming = true;
+		fake.isStreaming = true;
+
+		await registry.abortSession("sdk-1");
+
+		expect(fake.abortCalls).toBe(1);
+		expect(registry.getRow("sdk-1")?.status).toBe("aborted");
+		expect(registry.getRow("sdk-1")?.isStreaming).toBe(false);
+		expect(registry.getRow("sdk-1")?.activeTool).toBeUndefined();
+		expect(statuses).toContain("aborting");
+	});
+
+	test("records abort errors on the row", async () => {
+		const fake = new FakeSession();
+		fake.abortError = new Error("cannot stop");
+		const registry = new AgentsSessionRegistry({
+			createSession: (async () => ({ session: fake as never, extensionsResult: { extensions: [], errors: [], runtime: undefined } as never })) as never,
+		});
+
+		await registry.startBackgroundSession("Stop me", { cwd: "/repo" } as never);
+		fake.isStreaming = true;
+		await registry.abortSession("sdk-1");
+
+		expect(registry.getRow("sdk-1")?.status).toBe("error");
+		expect(registry.getRow("sdk-1")?.errorMessage).toBe("cannot stop");
 	});
 });

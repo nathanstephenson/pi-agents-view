@@ -84,6 +84,29 @@ export class AgentsSessionRegistry {
 		this.notify();
 	}
 
+	async abortSession(id: string): Promise<void> {
+		const row = this.rows.get(id);
+		if (!row?.sdk) return;
+
+		row.status = "aborting";
+		row.updatedAt = Date.now();
+		this.notify();
+
+		try {
+			await row.sdk.session.abort();
+			row.status = "aborted";
+			row.errorMessage = undefined;
+		} catch (error) {
+			row.status = "error";
+			row.errorMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			row.isStreaming = row.sdk.session.isStreaming;
+			row.activeTool = undefined;
+			row.updatedAt = Date.now();
+			this.notify();
+		}
+	}
+
 	async startBackgroundSession(prompt: string, ctx: Pick<ExtensionCommandContext, "cwd" | "model" | "modelRegistry">): Promise<void> {
 		const sessionManager = this.createSessionManager(ctx.cwd);
 		const result = (await this.createSession({

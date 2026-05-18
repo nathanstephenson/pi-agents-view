@@ -50,6 +50,11 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 						ctx.ui.notify(`Failed to open session: ${error instanceof Error ? error.message : String(error)}`, "warning");
 					});
 				},
+				onAbort: (rowId) => {
+					void registry.abortSession(rowId).catch((error) => {
+						ctx.ui.notify(`Failed to abort session: ${error instanceof Error ? error.message : String(error)}`, "warning");
+					});
+				},
 				onClose: close,
 				onInvalidate: () => tui.requestRender(),
 			});
