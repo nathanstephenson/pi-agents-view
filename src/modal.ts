@@ -4,6 +4,7 @@ import {
 	decodeKittyPrintable,
 	matchesKey,
 	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type Focusable,
 } from "@earendil-works/pi-tui";
@@ -22,6 +23,7 @@ interface AgentsModalOptions {
 	onAbort: (rowId: string) => void;
 	onClose: () => void;
 	onInvalidate?: () => void;
+	maxVisibleRows?: number;
 }
 
 export class AgentsModalComponent implements Component, Focusable {
@@ -51,7 +53,10 @@ export class AgentsModalComponent implements Component, Focusable {
 		if (rows.length === 0) {
 			lines.push(this.line(this.options.theme.fg("dim", "No sessions yet."), innerWidth));
 		} else {
-			for (const [index, row] of rows.entries()) {
+			const firstVisibleRow = this.firstVisibleRow(rows.length);
+			const visibleRows = this.visibleRows(rows);
+			for (const [offset, row] of visibleRows.entries()) {
+				const index = offset + firstVisibleRow;
 				const selected = index === this.selectedIndex;
 				const marker = selected ? ">" : " ";
 				const icon = row.source === "current-pi" ? "◆" : row.source === "recent-file" ? "○" : "●";
@@ -66,7 +71,7 @@ export class AgentsModalComponent implements Component, Focusable {
 		lines.push(this.line(`New session: ${this.prompt}${cursor}`, innerWidth));
 		lines.push(this.line(this.options.theme.fg("dim", "↑↓ select · Enter create/open · → open · Esc close"), innerWidth));
 		lines.push(`└${"─".repeat(innerWidth + 2)}┘`);
-		return lines;
+		return lines.map((line) => this.padLine(line, width));
 	}
 
 	handleInput(data: string): void {
@@ -152,7 +157,7 @@ export class AgentsModalComponent implements Component, Focusable {
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
 		lines.push(this.line(this.options.theme.fg("dim", "a abort · o open when idle · ← back · Esc close"), innerWidth));
 		lines.push(`└${"─".repeat(innerWidth + 2)}┘`);
-		return lines;
+		return lines.map((line) => this.padLine(line, innerWidth + 4));
 	}
 
 	private detailRow(): ManagedSessionRow | undefined {
@@ -167,8 +172,27 @@ export class AgentsModalComponent implements Component, Focusable {
 		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), Math.max(0, rowCount - 1));
 	}
 
+	private maxVisibleRows(rowCount: number): number {
+		const configured = this.options.maxVisibleRows ?? 5;
+		return Math.max(1, Math.min(rowCount, Math.floor(configured)));
+	}
+
+	private firstVisibleRow(rowCount: number): number {
+		const maxVisible = this.maxVisibleRows(rowCount);
+		return Math.min(Math.max(0, this.selectedIndex - maxVisible + 1), Math.max(0, rowCount - maxVisible));
+	}
+
+	private visibleRows(rows: ManagedSessionRow[]): ManagedSessionRow[] {
+		const start = this.firstVisibleRow(rows.length);
+		return rows.slice(start, start + this.maxVisibleRows(rows.length));
+	}
+
 	private line(content: string, width: number): string {
-		return `│ ${truncateToWidth(content, width, "…", true)} │`;
+		return this.padLine(`│ ${truncateToWidth(content, width, "…", true)} │`, width + 4);
+	}
+
+	private padLine(line: string, width: number): string {
+		return `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
 	}
 }
 

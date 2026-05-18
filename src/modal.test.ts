@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { AgentsModalComponent } from "./modal.js";
 import type { ManagedSessionRow } from "./types.js";
 
@@ -50,6 +51,63 @@ describe("AgentsModalComponent", () => {
 		modal.handleInput("\r");
 
 		expect(opened).toEqual(["two"]);
+	});
+
+	test("keeps long lists inside a fixed viewport while selecting past visible rows", () => {
+		const rows = Array.from({ length: 8 }, (_, index) => row(`row-${index}`, `Session ${index}`));
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => rows,
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxVisibleRows: 3,
+		});
+
+		for (let i = 0; i < 7; i++) modal.handleInput("\u001b[B");
+		const rendered = modal.render(90).join("\n");
+
+		expect(rendered).not.toContain("Session 0");
+		expect(rendered).not.toContain("Session 4");
+		expect(rendered).toContain("Session 5");
+		expect(rendered).toContain("Session 6");
+		expect(rendered).toContain("Session 7");
+		expect(modal.render(90)).toHaveLength(10);
+	});
+
+	test("renders every line at the same visible width to clear old overlay content", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("one", "A very long session title that previously left stale terminal cells behind"), row("two", "Short")],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		const rendered = modal.render(40);
+		const widths = new Set(rendered.map((line) => visibleWidth(line)));
+
+		expect(widths).toEqual(new Set([40]));
+	});
+
+	test("caps default list height to fit compact overlays", () => {
+		const rows = Array.from({ length: 20 }, (_, index) => row(`row-${index}`, `Session ${index}`));
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => rows,
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		const rendered = modal.render(90);
+		const sessionLines = rendered.filter((line) => line.includes("Session "));
+
+		expect(sessionLines).toHaveLength(5);
+		expect(rendered).toHaveLength(12);
 	});
 
 	test("edits prompt, creates on enter, and clears prompt", () => {
