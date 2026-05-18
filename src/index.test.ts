@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { openSessionRow } from "./index.js";
+import { bindAgentsWidget, openSessionRow, runningSdkRowCount } from "./index.js";
 import type { ManagedSessionRow } from "./types.js";
 
 function recent(sessionFile?: string): ManagedSessionRow {
@@ -12,6 +12,58 @@ function recent(sessionFile?: string): ManagedSessionRow {
 		updatedAt: 1,
 	};
 }
+
+describe("agents widget lifecycle", () => {
+	test("shows running sdk count only while the modal is closed", () => {
+		let listener: (() => void) | undefined;
+		const rows: ManagedSessionRow[] = [
+			{ id: "current", source: "current-pi", title: "Current", status: "current", updatedAt: 1 },
+			{ id: "running", source: "sdk-live", title: "Running", status: "running", isStreaming: true, updatedAt: 2 },
+		];
+		const widgetCalls: unknown[] = [];
+		const binding = bindAgentsWidget(
+			{ ui: { setWidget: (...args: unknown[]) => widgetCalls.push(args) } } as never,
+			{
+				getRows: () => rows,
+				subscribe: (callback: () => void) => {
+					listener = callback;
+					return () => {
+						listener = undefined;
+					};
+				},
+			},
+		);
+
+		expect(widgetCalls.at(-1)).toEqual(["agents-view", ["Agents: 1 running · /agents open"], { placement: "belowEditor" }]);
+
+		binding.setModalOpen(true);
+		expect(widgetCalls.at(-1)).toEqual(["agents-view", undefined]);
+
+		binding.setModalOpen(false);
+		expect(widgetCalls.at(-1)).toEqual(["agents-view", ["Agents: 1 running · /agents open"], { placement: "belowEditor" }]);
+
+		rows[1].status = "waiting";
+		rows[1].isStreaming = false;
+		listener?.();
+		expect(widgetCalls.at(-1)).toEqual(["agents-view", undefined]);
+
+		binding.unsubscribe();
+		expect(listener).toBeUndefined();
+	});
+
+	test("counts only running sdk rows", () => {
+		expect(
+			runningSdkRowCount({
+				getRows: () => [
+					{ id: "current", source: "current-pi", title: "Current", status: "running", updatedAt: 1 },
+					{ id: "running", source: "sdk-live", title: "Running", status: "running", updatedAt: 2 },
+					{ id: "waiting", source: "sdk-live", title: "Waiting", status: "waiting", updatedAt: 3 },
+					{ id: "recent", source: "recent-file", title: "Recent", status: "recent", updatedAt: 4 },
+				],
+			}),
+		).toBe(1);
+	});
+});
 
 describe("opening session rows", () => {
 	test("waits for the foreground session to be idle before switching recent files", async () => {

@@ -33,7 +33,11 @@ class FakeSession {
 		this.isStreaming = false;
 	}
 
-	dispose(): void {}
+	disposeCalls = 0;
+
+	dispose(): void {
+		this.disposeCalls++;
+	}
 }
 
 function session(overrides: Partial<SessionInfo> & Pick<SessionInfo, "path" | "id">): SessionInfo {
@@ -133,6 +137,29 @@ describe("AgentsSessionRegistry", () => {
 		expect(registry.getRow("sdk-1")?.isStreaming).toBe(false);
 		expect(registry.getRow("sdk-1")?.activeTool).toBeUndefined();
 		expect(statuses).toContain("aborting");
+	});
+
+	test("disposes all SDK sessions on shutdown cleanup", async () => {
+		const fake = new FakeSession();
+		const registry = new AgentsSessionRegistry({
+			createSession: (async () => ({ session: fake as never, extensionsResult: { extensions: [], errors: [], runtime: undefined } as never })) as never,
+		});
+
+		await registry.startBackgroundSession("Clean me up", { cwd: "/repo" } as never);
+		const row = registry.getRow("sdk-1");
+		if (!row) throw new Error("expected row");
+		row.status = "running";
+		row.isStreaming = true;
+		row.activeTool = "bash";
+
+		registry.disposeAll();
+
+		expect(fake.disposeCalls).toBe(1);
+		expect(fake.listener).toBeUndefined();
+		expect(registry.getRow("sdk-1")?.sdk).toBeUndefined();
+		expect(registry.getRow("sdk-1")?.status).toBe("aborted");
+		expect(registry.getRow("sdk-1")?.isStreaming).toBe(false);
+		expect(registry.getRow("sdk-1")?.activeTool).toBeUndefined();
 	});
 
 	test("records abort errors on the row", async () => {

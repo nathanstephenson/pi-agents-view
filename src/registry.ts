@@ -1,9 +1,13 @@
 import {
+	DefaultResourceLoader,
 	SessionManager,
+	SettingsManager,
 	createAgentSession,
+	getAgentDir,
 	type CreateAgentSessionResult,
 	type ExtensionCommandContext,
 	type ExtensionContext,
+	type ResourceLoader,
 	type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import { applySessionEvent } from "./reducers.js";
@@ -84,9 +88,22 @@ export class AgentsSessionRegistry {
 		this.notify();
 	}
 
+	disposeAll(): void {
+		for (const row of this.rows.values()) {
+			if (!row.sdk) continue;
+			row.sdk.unsubscribe();
+			row.sdk.session.dispose();
+			row.sdk = undefined;
+			row.isStreaming = false;
+			row.activeTool = undefined;
+			if (row.status === "running" || row.status === "queued" || row.status === "aborting") row.status = "aborted";
+		}
+		this.notify();
+	}
+
 	async abortSession(id: string): Promise<void> {
 		const row = this.rows.get(id);
-		if (!row?.sdk) return;
+		if (!row?.sdk || row.sdk.session.isStreaming === false) return;
 
 		row.status = "aborting";
 		row.updatedAt = Date.now();
@@ -109,12 +126,13 @@ export class AgentsSessionRegistry {
 
 	async startBackgroundSession(prompt: string, ctx: Pick<ExtensionCommandContext, "cwd" | "model" | "modelRegistry">): Promise<void> {
 		const sessionManager = this.createSessionManager(ctx.cwd);
+		const resourceLoader = await createNoExtensionsResourceLoader(ctx.cwd);
 		const result = (await this.createSession({
 			cwd: ctx.cwd,
 			sessionManager: sessionManager as never,
 			model: ctx.model,
 			modelRegistry: ctx.modelRegistry,
-			resourceLoader: createNoExtensionsResourceLoader(),
+			resourceLoader,
 		})) as CreateAgentSessionResult;
 		const { session } = result;
 		const row: ManagedSessionRow = {
@@ -129,7 +147,11 @@ export class AgentsSessionRegistry {
 		};
 		const unsubscribe = session.subscribe((event) => {
 			applySessionEvent(row, event);
-			row.isStreaming = session.isStreaming || row.isStreaming;
+			if (row.status === "waiting" || row.status === "complete" || row.status === "aborted" || row.status === "error") {
+				row.isStreaming = false;
+			} else {
+				row.isStreaming = session.isStreaming || row.isStreaming;
+			}
 			this.notify();
 		});
 		row.sdk = { session, unsubscribe };
@@ -160,10 +182,16 @@ function titleFromPrompt(prompt: string): string {
 	return firstLine.length > 48 ? `${firstLine.slice(0, 47)}…` : firstLine;
 }
 
-function createNoExtensionsResourceLoader(): undefined {
-	// The public SDK supports a caller-provided resourceLoader, but not a simple
-	// noExtensions option on createAgentSession. Leaving it undefined uses SDK defaults.
-	return undefined;
+async function createNoExtensionsResourceLoader(cwd: string): Promise<ResourceLoader> {
+	const agentDir = getAgentDir();
+	const loader = new DefaultResourceLoader({
+		cwd,
+		agentDir,
+		settingsManager: SettingsManager.create(cwd, agentDir),
+		noExtensions: true,
+	});
+	await loader.reload();
+	return loader;
 }
 
 function compareRows(left: ManagedSessionRow, right: ManagedSessionRow): number {
