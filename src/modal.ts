@@ -24,6 +24,7 @@ interface AgentsModalOptions {
 	onClose: () => void;
 	onInvalidate?: () => void;
 	maxVisibleRows?: number;
+	maxPromptLines?: number | (() => number);
 }
 
 export class AgentsModalComponent implements Component, Focusable {
@@ -67,8 +68,7 @@ export class AgentsModalComponent implements Component, Focusable {
 		}
 
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
-		const cursor = this.focused ? CURSOR_MARKER : "▌";
-		lines.push(this.line(`New session: ${this.prompt}${cursor}`, innerWidth));
+		for (const promptLine of this.promptInputLines(innerWidth)) lines.push(this.line(promptLine, innerWidth));
 		lines.push(this.line(this.options.theme.fg("dim", "↑↓ select · Enter create/open · → open · Esc close"), innerWidth));
 		lines.push(`└${"─".repeat(innerWidth + 2)}┘`);
 		return lines.map((line) => this.padLine(line, width));
@@ -185,6 +185,32 @@ export class AgentsModalComponent implements Component, Focusable {
 	private visibleRows(rows: ManagedSessionRow[]): ManagedSessionRow[] {
 		const start = this.firstVisibleRow(rows.length);
 		return rows.slice(start, start + this.maxVisibleRows(rows.length));
+	}
+
+	private promptInputLines(width: number): string[] {
+		const cursor = this.focused ? CURSOR_MARKER : "▌";
+		const label = "New session: ";
+		const continuation = " ".repeat(label.length);
+		const firstWidth = Math.max(1, width - label.length);
+		const continuationWidth = Math.max(1, width - continuation.length);
+		const chars = Array.from(`${this.prompt}${cursor}`);
+		const wrapped: string[] = [];
+		let index = 0;
+		let first = true;
+		do {
+			const prefix = first ? label : continuation;
+			const chunkWidth = first ? firstWidth : continuationWidth;
+			const chunk = chars.slice(index, index + chunkWidth).join("");
+			wrapped.push(`${prefix}${chunk}`);
+			index += chunkWidth;
+			first = false;
+		} while (index < chars.length);
+		return wrapped.slice(-this.maxPromptLines());
+	}
+
+	private maxPromptLines(): number {
+		const configured = typeof this.options.maxPromptLines === "function" ? this.options.maxPromptLines() : (this.options.maxPromptLines ?? 10);
+		return Math.max(1, Math.min(10, Math.floor(configured)));
 	}
 
 	private line(content: string, width: number): string {

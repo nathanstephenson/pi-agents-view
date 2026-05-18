@@ -101,6 +101,13 @@ async function openAgentsView(
 				unsubscribe();
 				done();
 			};
+			const maxPromptLines = () => {
+				const rowCount = registry.getRows().length;
+				const visibleRowCount = rowCount === 0 ? 1 : Math.min(rowCount, 5);
+				const fixedLineCount = 6 + visibleRowCount;
+				const overlayRows = Math.max(1, Math.floor(tui.terminal.rows * 0.8));
+				return Math.max(1, Math.min(10, overlayRows - fixedLineCount));
+			};
 			const modal = new AgentsModalComponent({
 				theme,
 				getRows: () => registry.getRows(),
@@ -125,6 +132,7 @@ async function openAgentsView(
 				},
 				onClose: close,
 				onInvalidate: () => tui.requestRender(),
+				maxPromptLines,
 			});
 			modal.focused = true;
 			return modal;
