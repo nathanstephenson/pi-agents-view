@@ -4,34 +4,84 @@ import { AgentsSessionRegistry } from "./registry.js";
 import type { ManagedSessionRow } from "./types.js";
 
 const AGENTS_VIEW_STATUS_ID = "agents-view";
+const AGENTS_WIDGET_ID = "agents-view";
 
-export async function openSessionRow(row: ManagedSessionRow | undefined, ctx: ExtensionCommandContext): Promise<void> {
+interface AgentsWidgetBinding {
+	setModalOpen(isOpen: boolean): void;
+	unsubscribe(): void;
+}
+
+export function runningSdkRowCount(registry: Pick<AgentsSessionRegistry, "getRows">): number {
+	return registry.getRows().filter((row) => row.source === "sdk-live" && (row.isStreaming || row.status === "running")).length;
+}
+
+export function bindAgentsWidget(
+	ctx: Pick<ExtensionContext, "ui">,
+	registry: Pick<AgentsSessionRegistry, "getRows" | "subscribe">,
+): AgentsWidgetBinding {
+	let modalOpen = false;
+	const update = () => {
+		const running = runningSdkRowCount(registry);
+		if (!modalOpen && running > 0) {
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, [`Agents: ${running} running · /agents open`], { placement: "belowEditor" });
+		} else {
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
+		}
+	};
+	const unsubscribeRegistry = registry.subscribe(update);
+	update();
+	return {
+		setModalOpen(isOpen: boolean) {
+			modalOpen = isOpen;
+			update();
+		},
+		unsubscribe() {
+			unsubscribeRegistry();
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
+		},
+	};
+}
+
+export async function openSessionRow(
+	row: ManagedSessionRow | undefined,
+	ctx: ExtensionCommandContext,
+	beforeSwitch?: () => void,
+): Promise<boolean> {
 	if (!row?.sessionFile) {
 		ctx.ui.notify("No session file to open", "warning");
-		return;
+		return false;
 	}
 
 	if (row.source === "sdk-live") {
 		if (row.isStreaming || row.sdk?.session.isStreaming || row.status === "running" || row.status === "queued") {
 			ctx.ui.notify("Session is running; inspect or abort it first", "warning");
-			return;
+			return false;
 		}
 
 		if (row.status === "aborting") {
 			ctx.ui.notify("Session is still aborting; wait until it is idle", "warning");
-			return;
+			return false;
 		}
 
 		row.sdk?.unsubscribe();
 		row.sdk?.session.dispose();
+		row.sdk = undefined;
+		row.isStreaming = false;
+		row.activeTool = undefined;
 	}
 
 	const sessionFile = row.sessionFile;
+	beforeSwitch?.();
 	await ctx.waitForIdle();
 	await ctx.switchSession(sessionFile);
+	return true;
 }
 
-async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSessionRegistry): Promise<void> {
+async function openAgentsView(
+	ctx: ExtensionCommandContext,
+	registry: AgentsSessionRegistry,
+	widgetBinding?: AgentsWidgetBinding,
+): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("Agents view requires the interactive TUI", "warning");
 		return;
@@ -42,7 +92,9 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 		ctx.ui.notify(`Failed to load recent sessions: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	});
 
-	await ctx.ui.custom<void>(
+	widgetBinding?.setModalOpen(true);
+	try {
+		await ctx.ui.custom<void>(
 		(tui, theme, _keybindings, done) => {
 			const unsubscribe = registry.subscribe(() => tui.requestRender());
 			const close = () => {
@@ -62,7 +114,7 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 				},
 				onOpen: (rowId) => {
 					const row = registry.getRow(rowId);
-					void openSessionRow(row, ctx).catch((error) => {
+					void openSessionRow(row, ctx, close).catch((error) => {
 						ctx.ui.notify(`Failed to open session: ${error instanceof Error ? error.message : String(error)}`, "warning");
 					});
 				},
@@ -87,11 +139,15 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 				margin: 1,
 			},
 		},
-	);
+		);
+	} finally {
+		widgetBinding?.setModalOpen(false);
+	}
 }
 
 export default function agentsViewExtension(pi: ExtensionAPI): void {
 	const registry = new AgentsSessionRegistry();
+	let widgetBinding: AgentsWidgetBinding | undefined;
 
 	pi.registerFlag("agents", {
 		description: "Open the agents view on startup",
@@ -102,13 +158,16 @@ export default function agentsViewExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("agents", {
 		description: "Open the agents view",
 		handler: async (_args, ctx) => {
-			await openAgentsView(ctx, registry);
+			if (!widgetBinding && ctx.hasUI) widgetBinding = bindAgentsWidget(ctx, registry);
+			await openAgentsView(ctx, registry, widgetBinding);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (!ctx.hasUI) return;
 
+		widgetBinding?.unsubscribe();
+		widgetBinding = bindAgentsWidget(ctx, registry);
 		registry.refreshCurrent(ctx);
 		void registry.refreshRecent(ctx.cwd);
 		ctx.ui.setStatus(AGENTS_VIEW_STATUS_ID, ctx.ui.theme.fg("dim", "agents:view"));
@@ -119,8 +178,12 @@ export default function agentsViewExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		widgetBinding?.unsubscribe();
+		widgetBinding = undefined;
+		registry.disposeAll();
 		if (ctx.hasUI) {
 			ctx.ui.setStatus(AGENTS_VIEW_STATUS_ID, undefined);
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
 		}
 	});
 }
