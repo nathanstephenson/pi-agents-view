@@ -37,7 +37,12 @@ async function openAgentsView(ctx: ExtensionCommandContext, registry: AgentsSess
 				theme,
 				getRows: () => registry.getRows(),
 				onCreate: (prompt) => {
-					ctx.ui.notify(`Background sessions are coming next: ${prompt}`, "info");
+					void registry.startBackgroundSession(prompt, ctx).catch((error) => {
+						ctx.ui.notify(
+							`Failed to start background session: ${error instanceof Error ? error.message : String(error)}`,
+							"warning",
+						);
+					});
 				},
 				onOpen: (rowId) => {
 					const row = registry.getRow(rowId);

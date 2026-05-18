@@ -1,6 +1,31 @@
 import { describe, expect, test } from "bun:test";
 import { AgentsSessionRegistry } from "./registry.js";
-import type { SessionInfo } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, SessionInfo } from "@earendil-works/pi-coding-agent";
+
+type Listener = (event: AgentSessionEvent) => void;
+
+class FakeSession {
+	readonly sessionId = "sdk-1";
+	readonly sessionFile = "/sessions/sdk-1.jsonl";
+	isStreaming = false;
+	promptCalls: Array<{ prompt: string; source?: string }> = [];
+	listener: Listener | undefined;
+
+	subscribe(listener: Listener): () => void {
+		this.listener = listener;
+		return () => {
+			this.listener = undefined;
+		};
+	}
+
+	async prompt(prompt: string, options?: { source?: string }): Promise<void> {
+		this.promptCalls.push({ prompt, source: options?.source });
+		this.isStreaming = true;
+		this.listener?.({ type: "agent_start" } as never);
+	}
+
+	dispose(): void {}
+}
 
 function session(overrides: Partial<SessionInfo> & Pick<SessionInfo, "path" | "id">): SessionInfo {
 	return {
@@ -48,5 +73,32 @@ describe("AgentsSessionRegistry", () => {
 
 		expect(registry.getRows().filter((row) => row.sessionFile === "/sessions/one.jsonl")).toHaveLength(1);
 		expect(notifications).toBe(2);
+	});
+
+	test("starts a persistent background SDK session and updates from live events", async () => {
+		const fake = new FakeSession();
+		const notifications: string[] = [];
+		const registry = new AgentsSessionRegistry({
+			createSession: (async () => ({ session: fake as never, extensionsResult: { extensions: [], errors: [], runtime: undefined } as never })) as never,
+			createSessionManager: (cwd) => ({ cwd, persisted: true }),
+		});
+		registry.subscribe(() => notifications.push(registry.getRows()[0]?.status ?? "none"));
+
+		await registry.startBackgroundSession("Investigate websocket reconnect flakes", { cwd: "/repo" } as never);
+
+		const row = registry.getRow("sdk-1");
+		expect(fake.promptCalls).toEqual([{ prompt: "Investigate websocket reconnect flakes", source: "extension" }]);
+		expect(row?.source).toBe("sdk-live");
+		expect(row?.sessionFile).toBe("/sessions/sdk-1.jsonl");
+		expect(row?.title).toBe("Investigate websocket reconnect flakes");
+		expect(row?.status).toBe("running");
+		expect(notifications.length).toBeGreaterThanOrEqual(2);
+
+		fake.listener?.({
+			type: "message_update",
+			message: { role: "assistant", content: [{ type: "text", text: "I found the reconnect issue" }] },
+		} as never);
+
+		expect(registry.getRow("sdk-1")?.assistantPreview).toContain("reconnect issue");
 	});
 });
