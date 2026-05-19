@@ -1,86 +1,167 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, SelectList, Text, type SelectItem } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AgentsModalComponent } from "./modal.js";
+import { AgentsSessionRegistry } from "./registry.js";
+import type { ManagedSessionRow } from "./types.js";
 
 const AGENTS_VIEW_STATUS_ID = "agents-view";
+const AGENTS_WIDGET_ID = "agents-view";
 
-async function openAgentsView(ctx: ExtensionContext): Promise<void> {
+interface AgentsWidgetBinding {
+	setModalOpen(isOpen: boolean): void;
+	unsubscribe(): void;
+}
+
+export function runningSdkRowCount(registry: Pick<AgentsSessionRegistry, "getRows">): number {
+	return registry.getRows().filter((row) => row.source === "sdk-live" && (row.isStreaming || row.status === "running")).length;
+}
+
+export function bindAgentsWidget(
+	ctx: Pick<ExtensionContext, "ui">,
+	registry: Pick<AgentsSessionRegistry, "getRows" | "subscribe">,
+): AgentsWidgetBinding {
+	let modalOpen = false;
+	const update = () => {
+		const running = runningSdkRowCount(registry);
+		if (!modalOpen && running > 0) {
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, [`Agents: ${running} running · /agents open`], { placement: "belowEditor" });
+		} else {
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
+		}
+	};
+	const unsubscribeRegistry = registry.subscribe(update);
+	update();
+	return {
+		setModalOpen(isOpen: boolean) {
+			modalOpen = isOpen;
+			update();
+		},
+		unsubscribe() {
+			unsubscribeRegistry();
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
+		},
+	};
+}
+
+export async function openSessionRow(
+	row: ManagedSessionRow | undefined,
+	ctx: ExtensionCommandContext,
+	beforeSwitch?: () => void,
+): Promise<boolean> {
+	if (!row?.sessionFile) {
+		ctx.ui.notify("No session file to open", "warning");
+		return false;
+	}
+
+	if (row.source === "sdk-live") {
+		if (row.isStreaming || row.sdk?.session.isStreaming || row.status === "running" || row.status === "queued") {
+			ctx.ui.notify("Session is running; inspect or abort it first", "warning");
+			return false;
+		}
+
+		if (row.status === "aborting") {
+			ctx.ui.notify("Session is still aborting; wait until it is idle", "warning");
+			return false;
+		}
+
+		row.sdk?.unsubscribe();
+		row.sdk?.session.dispose();
+		row.sdk = undefined;
+		row.isStreaming = false;
+		row.activeTool = undefined;
+	}
+
+	const sessionFile = row.sessionFile;
+	beforeSwitch?.();
+	await ctx.waitForIdle();
+	await ctx.switchSession(sessionFile);
+	return true;
+}
+
+async function openAgentsView(
+	ctx: ExtensionCommandContext,
+	registry: AgentsSessionRegistry,
+	widgetBinding?: AgentsWidgetBinding,
+): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("Agents view requires the interactive TUI", "warning");
 		return;
 	}
 
-	const items: SelectItem[] = [
-		{
-			value: "agents",
-			label: "Agents",
-			description: "Browse configured subagents and launch agent workflows (coming next)",
-		},
-		{
-			value: "chains",
-			label: "Chains",
-			description: "Browse saved subagent chains and pipeline templates (coming next)",
-		},
-		{
-			value: "runs",
-			label: "Runs",
-			description: "Inspect active and recent subagent runs (coming next)",
-		},
-	];
+	registry.refreshCurrent(ctx);
+	void registry.refreshRecent(ctx.cwd).catch((error) => {
+		ctx.ui.notify(`Failed to load recent sessions: ${error instanceof Error ? error.message : String(error)}`, "warning");
+	});
 
-	const selected = await ctx.ui.custom<string | null>(
+	widgetBinding?.setModalOpen(true);
+	try {
+		await ctx.ui.custom<void>(
 		(tui, theme, _keybindings, done) => {
-			const container = new Container();
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("Agents View")), 1, 0));
-			container.addChild(
-				new Text(theme.fg("dim", "Foundation loaded. Pick a section; deeper agent data is next."), 1, 0),
-			);
-
-			const list = new SelectList(items, items.length, {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
-			list.onSelect = (item) => done(item.value);
-			list.onCancel = () => done(null);
-			container.addChild(list);
-			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc close"), 1, 0));
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-
-			return {
-				render(width: number) {
-					return container.render(width);
-				},
-				invalidate() {
-					container.invalidate();
-				},
-				handleInput(data: string) {
-					list.handleInput(data);
-					tui.requestRender();
-				},
+			const requestRender = () => tui.requestRender();
+			const originalRender = tui.render.bind(tui);
+			let restored = false;
+			(tui as unknown as { render(width: number): string[] }).render = (width: number) =>
+				Array.from({ length: tui.terminal.rows }, () => " ".repeat(width));
+			const restoreMainRender = () => {
+				if (restored) return;
+				restored = true;
+				(tui as unknown as { render(width: number): string[] }).render = originalRender;
 			};
+			const unsubscribe = registry.subscribe(requestRender);
+			const close = () => {
+				unsubscribe();
+				restoreMainRender();
+				done();
+			};
+			const maxHeightLines = () => Math.max(8, Math.floor(tui.terminal.rows * 0.9));
+			const modal = new AgentsModalComponent({
+				theme,
+				getRows: () => registry.getRows(),
+				onCreate: (prompt) => {
+					void registry.startBackgroundSession(prompt, ctx).catch((error) => {
+						ctx.ui.notify(
+							`Failed to start background session: ${error instanceof Error ? error.message : String(error)}`,
+							"warning",
+						);
+					});
+				},
+				onOpen: (rowId) => {
+					const row = registry.getRow(rowId);
+					void openSessionRow(row, ctx, close).catch((error) => {
+						ctx.ui.notify(`Failed to open session: ${error instanceof Error ? error.message : String(error)}`, "warning");
+					});
+				},
+				onAbort: (rowId) => {
+					void registry.abortSession(rowId).catch((error) => {
+						ctx.ui.notify(`Failed to abort session: ${error instanceof Error ? error.message : String(error)}`, "warning");
+					});
+				},
+				onClose: close,
+				onInvalidate: requestRender,
+				maxHeightLines,
+			});
+			modal.focused = true;
+			return modal;
 		},
 		{
 			overlay: true,
 			overlayOptions: {
-				anchor: "right-center",
-				width: "45%",
-				minWidth: 48,
-				maxHeight: "80%",
+				anchor: "center",
+				width: "90%",
+				minWidth: 52,
+				maxHeight: "90%",
 				margin: 1,
 			},
 		},
-	);
-
-	if (selected) {
-		ctx.ui.notify(`${selected} view is not implemented yet`, "info");
+		);
+	} finally {
+		widgetBinding?.setModalOpen(false);
 	}
 }
 
 export default function agentsViewExtension(pi: ExtensionAPI): void {
+	const registry = new AgentsSessionRegistry();
+	let widgetBinding: AgentsWidgetBinding | undefined;
+
 	pi.registerFlag("agents", {
 		description: "Open the agents view on startup",
 		type: "boolean",
@@ -90,23 +171,32 @@ export default function agentsViewExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("agents", {
 		description: "Open the agents view",
 		handler: async (_args, ctx) => {
-			await openAgentsView(ctx);
+			if (!widgetBinding && ctx.hasUI) widgetBinding = bindAgentsWidget(ctx, registry);
+			await openAgentsView(ctx, registry, widgetBinding);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (!ctx.hasUI) return;
 
+		widgetBinding?.unsubscribe();
+		widgetBinding = bindAgentsWidget(ctx, registry);
+		registry.refreshCurrent(ctx);
+		void registry.refreshRecent(ctx.cwd);
 		ctx.ui.setStatus(AGENTS_VIEW_STATUS_ID, ctx.ui.theme.fg("dim", "agents:view"));
 
 		if (pi.getFlag("agents") === true) {
-			await openAgentsView(ctx);
+			ctx.ui.notify("Run /agents to open the agents view", "info");
 		}
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		widgetBinding?.unsubscribe();
+		widgetBinding = undefined;
+		registry.disposeAll();
 		if (ctx.hasUI) {
 			ctx.ui.setStatus(AGENTS_VIEW_STATUS_ID, undefined);
+			ctx.ui.setWidget(AGENTS_WIDGET_ID, undefined);
 		}
 	});
 }
