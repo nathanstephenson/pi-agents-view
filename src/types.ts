@@ -13,13 +13,16 @@ export type SessionRowStatus =
 
 export type SessionRowSource = "current-pi" | "sdk-live" | "recent-file";
 
-export type TranscriptEntryKind = "user" | "assistant" | "tool" | "error";
+export type TranscriptEntryKind = "user" | "assistant" | "tool" | "tool-result" | "notice" | "error";
 
 export interface TranscriptEntry {
 	id?: string;
 	kind: TranscriptEntryKind;
+	title?: string;
 	text: string;
-	createdAt: number;
+	status?: "running" | "complete" | "error";
+	createdAt?: number;
+	updatedAt?: number;
 }
 
 export interface ManagedSessionRow {

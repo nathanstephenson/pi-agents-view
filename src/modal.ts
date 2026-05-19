@@ -8,7 +8,7 @@ import {
 	type Component,
 	type Focusable,
 } from "@earendil-works/pi-tui";
-import type { ManagedSessionRow } from "./types.js";
+import type { ManagedSessionRow, TranscriptEntry } from "./types.js";
 
 type AgentsModalBg = "customMessageBg" | "selectedBg";
 
@@ -162,20 +162,67 @@ export class AgentsModalComponent implements Component, Focusable {
 		const maxHeight = this.maxHeightLines();
 		const lines = [
 			`┌ ${this.options.theme.fg("accent", title)} ${"─".repeat(Math.max(0, innerWidth - visibleCellCount(title) - 2))}┐`,
-			this.line(`Status: ${row.status}`, innerWidth),
+			this.line(row.activeTool ? `${row.status} · tool: ${row.activeTool}` : row.status, innerWidth),
 		];
-		if (row.activeTool) lines.push(this.line(`Tool: ${row.activeTool}`, innerWidth));
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
-		const preview = row.assistantPreview || row.errorMessage || row.promptPreview || "No output yet.";
-		const previewLimit = maxHeight ? Math.max(1, maxHeight - lines.length - 3) : 6;
-		for (const line of preview.split(/\r?\n/).slice(0, previewLimit)) lines.push(this.line(line, innerWidth));
+		const viewportHeight = maxHeight ? Math.max(1, maxHeight - lines.length - 3) : 6;
+		const transcriptLines = this.transcriptLines(row, innerWidth);
+		const visibleTranscriptLines = transcriptLines.slice(Math.max(0, transcriptLines.length - viewportHeight));
+		for (const transcriptLine of visibleTranscriptLines) lines.push(this.line(transcriptLine, innerWidth));
 		if (maxHeight) {
 			while (lines.length < maxHeight - 3) lines.push(this.line("", innerWidth));
 		}
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
-		lines.push(this.line(this.options.theme.fg("dim", "a abort · o open when idle · ← back · Esc close"), innerWidth));
+		lines.push(this.line(this.options.theme.fg("dim", "↑ scroll · a abort · o open when idle · ← back · Esc close"), innerWidth));
 		lines.push(`└${"─".repeat(innerWidth + 2)}┘`);
 		return lines.map((line) => this.opaqueLine(line, frameWidth));
+	}
+
+	private transcriptLines(row: ManagedSessionRow, width: number): string[] {
+		const entries = row.transcript?.filter((entry) => entry.text.trim() || entry.title?.trim()) ?? [];
+		if (entries.length === 0) {
+			return this.wrapText(row.assistantPreview || row.errorMessage || row.promptPreview || "No output yet.", width);
+		}
+
+		const lines: string[] = [];
+		for (const entry of entries) {
+			if (lines.length > 0) lines.push("");
+			const label = this.transcriptLabel(entry);
+			const text = entry.text || "";
+			const firstPrefix = label ? `${label} ` : "";
+			const wrapped = this.wrapText(text || entry.title || "", width, firstPrefix, label ? " ".repeat(visibleCellCount(firstPrefix)) : "");
+			lines.push(...wrapped);
+		}
+		return lines;
+	}
+
+	private transcriptLabel(entry: TranscriptEntry): string {
+		if (entry.kind === "user") return this.options.theme.fg("accent", this.options.theme.bold("You:"));
+		if (entry.kind === "assistant") return this.options.theme.bold("Assistant:");
+		if (entry.kind === "error") return this.options.theme.fg("error", this.options.theme.bold("Error:"));
+		if (entry.kind === "notice") return this.options.theme.fg("dim", "Notice:");
+		const title = entry.title ? ` ${entry.title}` : "";
+		const status = entry.status ? ` ${entry.status}` : "";
+		return this.options.theme.fg("dim", `Tool${title}${status}:`);
+	}
+
+	private wrapText(text: string, width: number, firstPrefix = "", continuationPrefix = ""): string[] {
+		const sourceLines = text.split(/\r?\n/);
+		const wrapped: string[] = [];
+		for (const sourceLine of sourceLines) {
+			let remaining = sourceLine || "";
+			let prefix = firstPrefix;
+			do {
+				const available = Math.max(1, width - visibleCellCount(prefix));
+				const chars = Array.from(remaining);
+				const chunk = chars.slice(0, available).join("");
+				wrapped.push(`${prefix}${chunk}`);
+				remaining = chars.slice(available).join("");
+				prefix = continuationPrefix;
+			} while (remaining.length > 0);
+			firstPrefix = continuationPrefix;
+		}
+		return wrapped.length ? wrapped : [firstPrefix];
 	}
 
 	private detailRow(): ManagedSessionRow | undefined {

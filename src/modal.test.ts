@@ -431,13 +431,118 @@ describe("AgentsModalComponent", () => {
 		const detail = modal.render(90).join("\n");
 
 		expect(detail).toContain("Fix auth tests");
-		expect(detail).toContain("Status: running");
-		expect(detail).toContain("Tool: grep");
+		expect(detail).toContain("running · tool: grep");
 		expect(detail).toContain("Latest output preview");
 
 		modal.handleInput("\u001b[D");
 
 		expect(modal.render(90).join("\n")).toContain("New session:");
+	});
+
+	test("detail renders multiple transcript entries with labels", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Fix auth tests", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					activeTool: "grep",
+					assistantPreview: "old one-line preview",
+					transcript: [
+						{ kind: "user", text: "Fix auth tests", updatedAt: 1 },
+						{ kind: "assistant", text: "I will inspect the failures.", updatedAt: 2 },
+						{ kind: "tool", title: "grep", status: "running", text: "pattern: auth", updatedAt: 3 },
+						{ kind: "notice", text: "Queued follow-up", updatedAt: 4 },
+						{ kind: "error", text: "Retry failed", updatedAt: 5 },
+					],
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 18,
+		});
+
+		modal.handleInput("\u001b[C");
+		const rendered = modal.render(90).join("\n");
+
+		expect(rendered).toContain("You: Fix auth tests");
+		expect(rendered).toContain("Assistant: I will inspect the failures.");
+		expect(rendered).toContain("Tool grep running: pattern: auth");
+		expect(rendered).toContain("Notice: Queued follow-up");
+		expect(rendered).toContain("Error: Retry failed");
+		expect(rendered).not.toContain("old one-line preview");
+	});
+
+	test("detail wraps long transcript text and keeps overlay invariants", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Wrap", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					transcript: [{ kind: "assistant", text: "abcdefghijklmnopqrstuvwxyz0123456789", updatedAt: 1 }],
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 12,
+		});
+
+		modal.handleInput("\u001b[C");
+		const rendered = modal.render(30);
+		const joined = rendered.join("\n");
+
+		expect(joined).toContain("Assistant: abcdefghijklmno");
+		expect(joined).toContain("           pqrstuvwxyz0123");
+		expect(rendered).toHaveLength(12);
+		expect(rendered.every((line) => !line.includes("\r"))).toBe(true);
+		expect(new Set(rendered.map((line) => visibleWidth(line)))).toEqual(new Set([30]));
+	});
+
+	test("detail viewport shows bottom transcript lines by default", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Bottom", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					transcript: Array.from({ length: 10 }, (_, index) => ({ kind: "assistant" as const, text: `line ${index}`, updatedAt: index })),
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 10,
+		});
+
+		modal.handleInput("\u001b[C");
+		const rendered = modal.render(80).join("\n");
+
+		expect(rendered).not.toContain("line 0");
+		expect(rendered).toContain("line 9");
+	});
+
+	test("detail falls back when transcript is empty", () => {
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("run", "Fallback", { source: "sdk-live", status: "running", isStreaming: true, promptPreview: "Prompt fallback" })],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		modal.handleInput("\u001b[C");
+
+		expect(modal.render(90).join("\n")).toContain("Prompt fallback");
 	});
 
 	test("detail aborts running row and opens idle row", () => {
