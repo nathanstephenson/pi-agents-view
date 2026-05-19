@@ -11,6 +11,7 @@ import {
 	type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import { applySessionEvent } from "./reducers.js";
+import { appendErrorTranscript, initializePromptTranscript } from "./transcript.js";
 import type { ManagedSessionRow, RegistryListener, SessionRowStatus } from "./types.js";
 
 interface RegistryOptions {
@@ -135,6 +136,7 @@ export class AgentsSessionRegistry {
 			resourceLoader,
 		})) as CreateAgentSessionResult;
 		const { session } = result;
+		const now = Date.now();
 		const row: ManagedSessionRow = {
 			id: session.sessionId,
 			source: "sdk-live",
@@ -142,8 +144,10 @@ export class AgentsSessionRegistry {
 			title: titleFromPrompt(prompt),
 			promptPreview: prompt,
 			status: "queued",
-			updatedAt: Date.now(),
+			updatedAt: now,
 			isStreaming: session.isStreaming,
+			transcript: initializePromptTranscript(prompt, now),
+			transcriptVersion: 1,
 		};
 		const unsubscribe = session.subscribe((event) => {
 			applySessionEvent(row, event);
@@ -161,6 +165,7 @@ export class AgentsSessionRegistry {
 		void session.prompt(prompt, { source: "extension" }).catch((error: unknown) => {
 			row.status = "error";
 			row.errorMessage = error instanceof Error ? error.message : String(error);
+			appendErrorTranscript(row, row.errorMessage);
 			row.isStreaming = false;
 			row.activeTool = undefined;
 			row.updatedAt = Date.now();

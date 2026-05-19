@@ -1,10 +1,13 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { applyTranscriptEvent } from "./transcript.js";
 import type { ManagedSessionRow } from "./types.js";
 
 const MAX_PREVIEW_CHARS = 2000;
 
 export function applySessionEvent(row: ManagedSessionRow, event: AgentSessionEvent): void {
-	row.updatedAt = Date.now();
+	const now = Date.now();
+	row.updatedAt = now;
+	applyTranscriptEvent(row, event, now);
 
 	switch (event.type) {
 		case "agent_start":

@@ -105,6 +105,8 @@ describe("AgentsSessionRegistry", () => {
 		expect(row?.sessionFile).toBe("/sessions/sdk-1.jsonl");
 		expect(row?.title).toBe("Investigate websocket reconnect flakes");
 		expect(row?.status).toBe("running");
+		expect(row?.transcriptVersion).toBe(1);
+		expect(row?.transcript?.[0]).toMatchObject({ kind: "user", text: "Investigate websocket reconnect flakes" });
 		expect(notifications.length).toBeGreaterThanOrEqual(2);
 
 		fake.listener?.({
@@ -113,6 +115,8 @@ describe("AgentsSessionRegistry", () => {
 		} as never);
 
 		expect(registry.getRow("sdk-1")?.assistantPreview).toContain("reconnect issue");
+		expect(registry.getRow("sdk-1")?.transcriptVersion).toBe(2);
+		expect(registry.getRow("sdk-1")?.transcript?.at(-1)).toMatchObject({ kind: "assistant", text: "I found the reconnect issue" });
 	});
 
 	test("aborts a live SDK session without disposing it", async () => {
@@ -160,6 +164,27 @@ describe("AgentsSessionRegistry", () => {
 		expect(registry.getRow("sdk-1")?.status).toBe("aborted");
 		expect(registry.getRow("sdk-1")?.isStreaming).toBe(false);
 		expect(registry.getRow("sdk-1")?.activeTool).toBeUndefined();
+	});
+
+	test("records prompt failures in the transcript", async () => {
+		class FailingPromptSession extends FakeSession {
+			override async prompt(prompt: string, options?: { source?: string }): Promise<void> {
+				this.promptCalls.push({ prompt, source: options?.source });
+				throw new Error("prompt failed");
+			}
+		}
+		const fake = new FailingPromptSession();
+		const registry = new AgentsSessionRegistry({
+			createSession: (async () => ({ session: fake as never, extensionsResult: { extensions: [], errors: [], runtime: undefined } as never })) as never,
+		});
+
+		await registry.startBackgroundSession("Fail me", { cwd: "/repo" } as never);
+		await Promise.resolve();
+
+		expect(registry.getRow("sdk-1")?.status).toBe("error");
+		expect(registry.getRow("sdk-1")?.transcriptVersion).toBe(2);
+		expect(registry.getRow("sdk-1")?.transcript?.map((entry) => entry.kind)).toEqual(["user", "error"]);
+		expect(registry.getRow("sdk-1")?.transcript?.at(-1)?.text).toBe("prompt failed");
 	});
 
 	test("records abort errors on the row", async () => {
