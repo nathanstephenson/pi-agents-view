@@ -104,5 +104,11 @@ function capPreview(text: string): string {
 
 function stringify(value: unknown): string | undefined {
 	if (value === undefined) return undefined;
-	return value instanceof Error ? value.message : typeof value === "string" ? value : JSON.stringify(value);
+	if (value instanceof Error) return value.message;
+	if (typeof value === "string") return value;
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return "[unserializable result]";
+	}
 }
