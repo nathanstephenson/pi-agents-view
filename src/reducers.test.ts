@@ -51,6 +51,17 @@ describe("applySessionEvent", () => {
 		expect(subject.transcript?.map((entry) => entry.text)).toEqual(["First done", "Second"]);
 	});
 
+	test("clears no-id assistant state when message_end has no text", () => {
+		const subject = row();
+
+		applySessionEvent(subject, { type: "message_start", message: { role: "assistant", content: "First" } } as never);
+		applySessionEvent(subject, { type: "message_end", message: { role: "assistant" } } as never);
+		applySessionEvent(subject, { type: "message_update", message: { role: "assistant", content: "Second" } } as never);
+
+		expect(subject.transcript).toHaveLength(2);
+		expect(subject.transcript?.map((entry) => entry.text)).toEqual(["First", "Second"]);
+	});
+
 	test("tracks visible tool lifecycle details", () => {
 		const subject = row();
 

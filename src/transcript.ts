@@ -28,7 +28,10 @@ function transcriptEntryFromEvent(row: TranscriptState, event: AgentSessionEvent
 		case "message_update":
 		case "message_end": {
 			const text = getMessageText((event as { message?: unknown }).message);
-			if (!text) return undefined;
+			if (!text) {
+				clearNoIdAssistantEntry(row, event);
+				return undefined;
+			}
 			return createTranscriptEntry("assistant", text, now, messageEntryId(row, event));
 		}
 		case "tool_execution_start":
@@ -121,6 +124,14 @@ function messageEntryId(row: TranscriptState, event: AgentSessionEvent): string 
 	const id = row.activeAssistantEntryId;
 	if (event.type === "message_end") row.activeAssistantEntryId = undefined;
 	return id;
+}
+
+function clearNoIdAssistantEntry(row: TranscriptState, event: AgentSessionEvent): void {
+	if (event.type !== "message_end") return;
+	const message = (event as { message?: { id?: unknown; role?: unknown } }).message;
+	if (typeof message?.id === "string") return;
+	if (message?.role && message.role !== "assistant") return;
+	row.activeAssistantEntryId = undefined;
 }
 
 function toolEntryId(event: unknown): string | undefined {
