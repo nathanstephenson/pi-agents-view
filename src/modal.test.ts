@@ -530,6 +530,98 @@ describe("AgentsModalComponent", () => {
 		expect(rendered).toContain("line 9");
 	});
 
+	test("detail up reveals earlier lines and end follows latest output", () => {
+		let entries = Array.from({ length: 10 }, (_, index) => ({ kind: "assistant" as const, text: `line ${index}`, updatedAt: index }));
+		let version = 1;
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Scroll", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					transcript: entries,
+					transcriptVersion: version,
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 10,
+		});
+
+		modal.handleInput("\u001b[C");
+		expect(modal.render(80).join("\n")).toContain("line 9");
+
+		modal.handleInput("\u001b[A");
+		let rendered = modal.render(80).join("\n");
+		expect(rendered).toContain("line 8");
+		expect(rendered).not.toContain("line 9");
+		expect(rendered).toContain("End follow latest");
+
+		entries = [...entries, { kind: "assistant" as const, text: "line 10", updatedAt: 10 }];
+		version++;
+		rendered = modal.render(80).join("\n");
+		expect(rendered).toContain("line 8");
+		expect(rendered).not.toContain("line 10");
+
+		modal.handleInput("\u001b[F");
+		rendered = modal.render(80).join("\n");
+		expect(rendered).toContain("line 10");
+		expect(rendered).toContain("↑ scroll");
+	});
+
+	test("detail at bottom follows incoming updates automatically", () => {
+		let entries = Array.from({ length: 9 }, (_, index) => ({ kind: "assistant" as const, text: `line ${index}`, updatedAt: index }));
+		let version = 1;
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [
+				row("run", "Follow", {
+					source: "sdk-live",
+					status: "running",
+					isStreaming: true,
+					transcript: entries,
+					transcriptVersion: version,
+				}),
+			],
+			onCreate: () => {},
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+			maxHeightLines: () => 10,
+		});
+
+		modal.handleInput("\u001b[C");
+		expect(modal.render(80).join("\n")).toContain("line 8");
+
+		entries = [...entries, { kind: "assistant" as const, text: "line 9", updatedAt: 9 }];
+		version++;
+		const rendered = modal.render(80).join("\n");
+		expect(rendered).toContain("line 9");
+		expect(rendered).not.toContain("line 0");
+	});
+
+	test("printable keys in detail do not edit prompt", () => {
+		const created: string[] = [];
+		const modal = new AgentsModalComponent({
+			theme,
+			getRows: () => [row("run", "Prompt", { source: "sdk-live", status: "running", isStreaming: true })],
+			onCreate: (prompt) => created.push(prompt),
+			onOpen: () => {},
+			onAbort: noop,
+			onClose: () => {},
+		});
+
+		modal.handleInput("\u001b[C");
+		modal.handleInput("z");
+		modal.handleInput("\u001b[D");
+		modal.handleInput("\r");
+
+		expect(created).toEqual([]);
+	});
+
 	test("detail falls back when transcript is empty", () => {
 		const modal = new AgentsModalComponent({
 			theme,
