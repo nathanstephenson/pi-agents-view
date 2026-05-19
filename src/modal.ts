@@ -37,6 +37,11 @@ export class AgentsModalComponent implements Component, Focusable {
 	private prompt = "";
 	private mode: "list" | "detail" = "list";
 	private detailRowId: string | undefined;
+	private detailScrollOffset = 0;
+	private detailFollow = true;
+	private lastDetailVersionByRow = new Map<string, number>();
+	private lastDetailLineCount = 0;
+	private lastDetailViewportHeight = 1;
 
 	constructor(private readonly options: AgentsModalOptions) {}
 
@@ -130,6 +135,7 @@ export class AgentsModalComponent implements Component, Focusable {
 		if (isRunningSdkRow(row)) {
 			this.mode = "detail";
 			this.detailRowId = row.id;
+			this.resetDetailScroll(row);
 			return;
 		}
 		this.options.onOpen(row.id);
@@ -140,8 +146,17 @@ export class AgentsModalComponent implements Component, Focusable {
 		if (matchesKey(data, Key.left)) {
 			this.mode = "list";
 			this.detailRowId = undefined;
+			this.resetDetailScroll();
 		} else if (matchesKey(data, Key.escape)) {
 			this.options.onClose();
+		} else if (matchesKey(data, Key.up)) {
+			this.scrollDetailUp(1);
+		} else if (matchesKey(data, Key.down)) {
+			this.scrollDetailDown(1);
+		} else if (isHomeKey(data)) {
+			this.scrollDetailToTop();
+		} else if (isEndKey(data)) {
+			this.scrollDetailToBottom();
 		} else if (data === "a" && row) {
 			this.options.onAbort(row.id);
 		} else if (data === "o" && row && !isRunningSdkRow(row)) {
@@ -167,15 +182,63 @@ export class AgentsModalComponent implements Component, Focusable {
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
 		const viewportHeight = maxHeight ? Math.max(1, maxHeight - lines.length - 3) : 6;
 		const transcriptLines = this.transcriptLines(row, innerWidth);
-		const visibleTranscriptLines = transcriptLines.slice(Math.max(0, transcriptLines.length - viewportHeight));
+		this.trackDetailVersion(row);
+		this.lastDetailLineCount = transcriptLines.length;
+		this.lastDetailViewportHeight = viewportHeight;
+		const viewport = this.detailViewport(transcriptLines.length, viewportHeight);
+		const visibleTranscriptLines = transcriptLines.slice(viewport.start, viewport.end);
 		for (const transcriptLine of visibleTranscriptLines) lines.push(this.line(transcriptLine, innerWidth));
 		if (maxHeight) {
 			while (lines.length < maxHeight - 3) lines.push(this.line("", innerWidth));
 		}
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
-		lines.push(this.line(this.options.theme.fg("dim", "↑ scroll · a abort · o open when idle · ← back · Esc close"), innerWidth));
+		const range = transcriptLines.length > 0 ? ` · ${viewport.start + 1}-${viewport.end}/${transcriptLines.length}` : "";
+		const scrollHelp = this.detailFollow ? "↑ scroll" : "↑↓ scroll · End follow latest";
+		lines.push(this.line(this.options.theme.fg("dim", `${scrollHelp}${range} · a abort · o open when idle · ← back · Esc close`), innerWidth));
 		lines.push(`└${"─".repeat(innerWidth + 2)}┘`);
 		return lines.map((line) => this.opaqueLine(line, frameWidth));
+	}
+
+	private detailViewport(total: number, height: number): { start: number; end: number; offset: number; maxOffset: number } {
+		const maxOffset = Math.max(0, total - height);
+		const offset = this.detailFollow ? 0 : Math.min(this.detailScrollOffset, maxOffset);
+		if (offset !== this.detailScrollOffset) this.detailScrollOffset = offset;
+		if (offset === 0) this.detailFollow = true;
+		const end = Math.max(0, total - offset);
+		const start = Math.max(0, end - height);
+		return { start, end, offset, maxOffset };
+	}
+
+	private scrollDetailUp(lines: number): void {
+		this.detailFollow = false;
+		this.detailScrollOffset = Math.max(0, this.detailScrollOffset + lines);
+	}
+
+	private scrollDetailDown(lines: number): void {
+		this.detailScrollOffset = Math.max(0, this.detailScrollOffset - lines);
+		if (this.detailScrollOffset === 0) this.detailFollow = true;
+	}
+
+	private scrollDetailToBottom(): void {
+		this.detailScrollOffset = 0;
+		this.detailFollow = true;
+	}
+
+	private scrollDetailToTop(): void {
+		this.detailScrollOffset = Math.max(0, this.lastDetailLineCount - this.lastDetailViewportHeight);
+		this.detailFollow = false;
+	}
+
+	private resetDetailScroll(row?: ManagedSessionRow): void {
+		this.detailScrollOffset = 0;
+		this.detailFollow = true;
+		if (row) this.lastDetailVersionByRow.set(row.id, row.transcriptVersion ?? 0);
+	}
+
+	private trackDetailVersion(row: ManagedSessionRow): void {
+		const version = row.transcriptVersion ?? 0;
+		const previous = this.lastDetailVersionByRow.get(row.id);
+		if (previous !== version) this.lastDetailVersionByRow.set(row.id, version);
 	}
 
 	private transcriptLines(row: ManagedSessionRow, width: number): string[] {
@@ -336,6 +399,14 @@ function printableInput(data: string): string | undefined {
 	if (kitty) return kitty;
 	if (data.length === 1 && data >= " " && data !== "\x7f") return data;
 	return undefined;
+}
+
+function isHomeKey(data: string): boolean {
+	return data === "\u001b[H" || data === "\u001b[1~" || data === "\u001b[7~";
+}
+
+function isEndKey(data: string): boolean {
+	return data === "\u001b[F" || data === "\u001b[4~" || data === "\u001b[8~";
 }
 
 function isRunningSdkRow(row: ManagedSessionRow): boolean {
