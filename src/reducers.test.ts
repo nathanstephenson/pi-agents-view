@@ -39,18 +39,32 @@ describe("applySessionEvent", () => {
 		expect(subject.transcript?.[0]).toMatchObject({ kind: "assistant", text: "Hello" });
 	});
 
-	test("tracks active tool lifecycle", () => {
+	test("keeps separate no-id assistant messages while upserting active message events", () => {
 		const subject = row();
 
-		applySessionEvent(subject, { type: "tool_execution_start", toolName: "grep", args: {}, toolCallId: "tool-1" } as never);
+		applySessionEvent(subject, { type: "message_start", message: { role: "assistant", content: "Fir" } } as never);
+		applySessionEvent(subject, { type: "message_update", message: { role: "assistant", content: "First" } } as never);
+		applySessionEvent(subject, { type: "message_end", message: { role: "assistant", content: "First done" } } as never);
+		applySessionEvent(subject, { type: "message_start", message: { role: "assistant", content: "Second" } } as never);
+
+		expect(subject.transcript).toHaveLength(2);
+		expect(subject.transcript?.map((entry) => entry.text)).toEqual(["First done", "Second"]);
+	});
+
+	test("tracks visible tool lifecycle details", () => {
+		const subject = row();
+
+		applySessionEvent(subject, { type: "tool_execution_start", toolName: "grep", args: { pattern: "needle" }, toolCallId: "tool-1" } as never);
 		expect(subject.status).toBe("running");
 		expect(subject.activeTool).toBe("grep");
 		expect(subject.isStreaming).toBe(true);
+		expect(subject.transcript?.[0]).toMatchObject({ kind: "tool", title: "grep", status: "running" });
+		expect(subject.transcript?.[0]?.text).toContain("needle");
 
-		applySessionEvent(subject, { type: "tool_execution_end", toolName: "grep", result: "", isError: false, toolCallId: "tool-1" } as never);
+		applySessionEvent(subject, { type: "tool_execution_end", toolName: "grep", result: "found it", isError: false, toolCallId: "tool-1" } as never);
 		expect(subject.activeTool).toBeUndefined();
 		expect(subject.transcriptVersion).toBe(2);
-		expect(subject.transcript).toMatchObject([{ kind: "tool", text: "grep finished" }]);
+		expect(subject.transcript).toMatchObject([{ kind: "tool", title: "grep", status: "complete", text: "found it" }]);
 	});
 
 	test("marks agent end as waiting and clears streaming state", () => {
@@ -67,7 +81,7 @@ describe("applySessionEvent", () => {
 		expect(subject.activeTool).toBeUndefined();
 	});
 
-	test("updates title and queue preview from session events", () => {
+	test("updates title and shows queue notices from session events", () => {
 		const subject = row();
 
 		applySessionEvent(subject, { type: "session_info_changed", name: "Named background task" } as never);
@@ -76,17 +90,20 @@ describe("applySessionEvent", () => {
 		expect(subject.title).toBe("Named background task");
 		expect(subject.status).toBe("queued");
 		expect(subject.assistantPreview).toContain("2 queued");
+		expect(subject.transcript).toMatchObject([{ kind: "notice", text: "Queued steering: urgent\nQueued follow-up: next" }]);
 	});
 
-	test("shows retries and errors in transcript", () => {
+	test("shows retries and errors in transcript without throwing on circular values", () => {
 		const subject = row();
+		const circular: { self?: unknown } = {};
+		circular.self = circular;
 
 		applySessionEvent(subject, { type: "auto_retry_start", attempt: 2, maxAttempts: 3, errorMessage: "rate limited" } as never);
-		applySessionEvent(subject, { type: "tool_execution_end", toolName: "bash", result: "exit 1", isError: true } as never);
+		applySessionEvent(subject, { type: "tool_execution_end", toolName: "bash", result: circular, isError: true } as never);
 
 		expect(subject.transcript?.map((entry) => entry.kind)).toEqual(["error", "error"]);
 		expect(subject.transcript?.map((entry) => entry.text).join("\n")).toContain("rate limited");
-		expect(subject.transcript?.map((entry) => entry.text).join("\n")).toContain("exit 1");
+		expect(subject.transcript?.map((entry) => entry.text).join("\n")).toContain("[unserializable result]");
 	});
 
 	test("caps transcript entries while preserving the first user entry", () => {

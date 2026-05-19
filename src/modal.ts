@@ -39,7 +39,6 @@ export class AgentsModalComponent implements Component, Focusable {
 	private detailRowId: string | undefined;
 	private detailScrollOffset = 0;
 	private detailFollow = true;
-	private lastDetailVersionByRow = new Map<string, number>();
 	private lastDetailLineCount = 0;
 	private lastDetailViewportHeight = 1;
 
@@ -182,7 +181,6 @@ export class AgentsModalComponent implements Component, Focusable {
 		lines.push(`├${"─".repeat(innerWidth + 2)}┤`);
 		const viewportHeight = maxHeight ? Math.max(1, maxHeight - lines.length - 3) : 6;
 		const transcriptLines = this.transcriptLines(row, innerWidth);
-		this.trackDetailVersion(row);
 		this.lastDetailLineCount = transcriptLines.length;
 		this.lastDetailViewportHeight = viewportHeight;
 		const viewport = this.detailViewport(transcriptLines.length, viewportHeight);
@@ -229,16 +227,9 @@ export class AgentsModalComponent implements Component, Focusable {
 		this.detailFollow = false;
 	}
 
-	private resetDetailScroll(row?: ManagedSessionRow): void {
+	private resetDetailScroll(_row?: ManagedSessionRow): void {
 		this.detailScrollOffset = 0;
 		this.detailFollow = true;
-		if (row) this.lastDetailVersionByRow.set(row.id, row.transcriptVersion ?? 0);
-	}
-
-	private trackDetailVersion(row: ManagedSessionRow): void {
-		const version = row.transcriptVersion ?? 0;
-		const previous = this.lastDetailVersionByRow.get(row.id);
-		if (previous !== version) this.lastDetailVersionByRow.set(row.id, version);
 	}
 
 	private transcriptLines(row: ManagedSessionRow, width: number): string[] {
