@@ -13,6 +13,15 @@ export type SessionRowStatus =
 
 export type SessionRowSource = "current-pi" | "sdk-live" | "recent-file";
 
+export type TranscriptEntryKind = "user" | "assistant" | "tool" | "error";
+
+export interface TranscriptEntry {
+	id?: string;
+	kind: TranscriptEntryKind;
+	text: string;
+	createdAt: number;
+}
+
 export interface ManagedSessionRow {
 	id: string;
 	source: SessionRowSource;
@@ -26,6 +35,8 @@ export interface ManagedSessionRow {
 	messageCount?: number;
 	errorMessage?: string;
 	isStreaming?: boolean;
+	transcript?: TranscriptEntry[];
+	transcriptVersion?: number;
 
 	sdk?: {
 		session: AgentSession;
