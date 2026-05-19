@@ -40,6 +40,10 @@ List view:
 
 Detail view:
 
+- running SDK sessions show their live transcript in the modal, without switching the main Pi UI into the session file
+- `↑` / `↓`: scroll the transcript up or down
+- `Home` / `End`: jump to the top or bottom of the transcript
+- the detail view follows the latest transcript output while it is at the bottom; scrolling up pauses follow-latest until you scroll back down or press `End`
 - `←`: return to list
 - `a`: abort the selected SDK-created session
 - `o`: open the selected session after it is idle
